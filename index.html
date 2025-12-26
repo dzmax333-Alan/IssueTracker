@@ -2,7 +2,7 @@
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
-    <title>工廠異常追蹤系統 (雲端穩定版 v6)</title>
+    <title>工廠異常追蹤系統 (雲端穩定版 v6.3)</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <style>
@@ -123,8 +123,7 @@
         <p>選擇匯出狀態：</p>
         <select id="exportStatusSelect" style="margin-bottom:20px">
             <option value="all">全部</option>
-            <option value="new">待處理</option>
-            <option value="saved">追蹤中</option>
+            <option value="active">待處理</option>
             <option value="closed">已結案</option>
         </select>
         <div style="display:flex; gap:10px">
@@ -152,16 +151,22 @@
             <h2 style="margin:0; display:flex; align-items:center; gap:8px;">
                 <!-- 雲端 Icon -->
                 <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:#2563eb"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"></path></svg>
-                工廠異常追蹤 <span class="badge-cloud">雲端版 v6</span>
+                工廠異常追蹤 <span class="badge-cloud">雲端版 v6.3</span>
             </h2>
             <div class="search-group">
+                <!-- 新增：負責人篩選 -->
+                <select id="peFilter" onchange="renderTable()" style="width: 100px; font-weight:bold; color:#2563eb;"><option value="all">負責人(全)</option></select>
                 <select id="searchField" style="width: 70px;"><option value="workOrder">工單</option><option value="model">機種</option></select>
                 <input type="text" id="searchInput" placeholder="關鍵字..." oninput="renderTable()" style="width: 100px;">
-                <select id="categoryFilter" onchange="renderTable()" style="width: 100px;"><option value="all">ALL</option></select>
+                <select id="categoryFilter" onchange="renderTable()" style="width: 100px;"><option value="all">類別(全)</option></select>
             </div>
         </div>
         <div class="action-group">
-            <select id="statusFilter" onchange="renderTable()" style="width:auto;"><option value="all">🔍 全部</option><option value="new">🆕 待處理</option><option value="saved">💾 追蹤中</option><option value="closed">✅ 已結案</option></select>
+            <select id="statusFilter" onchange="renderTable()" style="width:auto;">
+                <option value="all">🔍 全部</option>
+                <option value="active">⚡ 待處理</option>
+                <option value="closed">✅ 已結案</option>
+            </select>
             <button class="btn btn-refresh" onclick="confirmReload()" title="從 Google Sheet 下載最新資料">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
                 讀取雲端
@@ -194,7 +199,7 @@
             <thead>
                 <tr>
                     <th style="width:30px; text-align:center"><input type="checkbox" onclick="toggleSelectAll(this)"></th>
-                    <th style="width:65px">ID/狀態</th>
+                    <th style="width:80px">ID/狀態</th> <!-- ID欄位加寬 -->
                     <th style="width:105px">發生日期</th>
                     <th style="width:120px">工單/機種</th>
                     <th style="width:110px">批量/不良/率</th>
@@ -267,18 +272,15 @@
         showLoading("📥 正在下載雲端資料...");
         try {
             const res = await fetch(SHEET_CSV_URL + "&t=" + Date.now());
-            
-            // 增強錯誤檢查：如果回傳的是 HTML (通常是登入頁面)，代表權限沒開
             const contentType = res.headers.get("content-type");
             if (contentType && contentType.includes("text/html")) {
                 throw new Error("權限錯誤：無法讀取 CSV。\n請檢查 Google Sheet「發布到網路」是否設為「公開」。");
             }
-
             if (!res.ok) throw new Error("網路請求失敗");
-            
             const text = await res.text();
+            
             issuesData = csvToJSON(text);
-            updateCategorySearchFilter();
+            updateFilters(); // 更新所有篩選選單
             renderTable();
             hideLoading("✅ 資料同步完成");
         } catch (e) {
@@ -288,105 +290,70 @@
         }
     }
 
-    // --- 雲端儲存 (有圖片自動壓縮機制) ---
     async function saveRow(id, silent = false) {
         const rowData = getRowData(id);
-        
-        // 確保本地有顯示
         issuesData[id] = rowData;
         if (!silent) renderTable();
-        if (!silent) showLoading("☁️ 上傳中 (含圖片處理)...");
-
+        if (!silent) showLoading("☁️ 上傳中...");
         try {
             await fetch(GOOGLE_SCRIPT_URL, {
-                method: 'POST',
-                mode: 'no-cors',
+                method: 'POST', mode: 'no-cors',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(rowData)
             });
-            
             if (!silent) hideLoading("✅ 雲端儲存成功！");
-        } catch (err) {
-            hideLoading();
-            alert("上傳失敗：" + err);
-        }
+        } catch (err) { hideLoading(); alert("上傳失敗：" + err); }
     }
 
-    // --- 舊資料批次上傳 (遷移工具) ---
     async function handleBatchUpload(input) {
         if (!input.files.length) return;
         const file = input.files[0];
-        
-        if (!confirm(`確定要上傳 ${file.name} 到雲端嗎？\n圖片會自動上傳到雲端硬碟。`)) {
-            input.value = ''; return;
-        }
-
+        if (!confirm(`確定要上傳 ${file.name} 到雲端嗎？\n圖片會自動上傳到雲端硬碟。`)) { input.value = ''; return; }
         const reader = new FileReader();
         reader.onload = async (e) => {
             try {
                 const json = JSON.parse(e.target.result);
                 const sourceData = json.issues || json; 
                 const items = Object.values(sourceData);
-                
                 showLoading(`準備上傳 ${items.length} 筆資料...`);
-                
                 for (let i = 0; i < items.length; i++) {
                     const item = items[i];
                     item.action = 'update';
                     if(!item.status) item.status = 'saved';
-                    // 舊照片可能很大，這裡不做壓縮直接傳，讓 GAS 處理
                     if(item.imgs) item.imgs = convertOldImgs(item.imgs);
                     if(item.replyImgs) item.replyImgs = convertOldImgs(item.replyImgs);
-
                     showLoading(`上傳第 ${i+1} / ${items.length} 筆... (ID: ${item.id})`);
-                    
                     await fetch(GOOGLE_SCRIPT_URL, {
-                        method: 'POST',
-                        mode: 'no-cors',
+                        method: 'POST', mode: 'no-cors',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(item)
                     });
-                    
-                    await new Promise(r => setTimeout(r, 1000)); // 避免太快撞牆
+                    await new Promise(r => setTimeout(r, 1000));
                 }
-                
                 hideLoading("✅ 全部上傳完成！圖片已轉存 Drive。");
                 alert("上傳完成！請等待 5 分鐘後再按「📥 讀取雲端」。");
-
-            } catch (err) {
-                hideLoading();
-                alert("解析 JSON 失敗：" + err);
-            }
+            } catch (err) { hideLoading(); alert("解析 JSON 失敗：" + err); }
         };
         reader.readAsText(file);
     }
-
     function convertOldImgs(list) {
         if (!Array.isArray(list)) return [];
-        return list.map(img => {
-            if (typeof img === 'string') return { name: 'image.jpg', data: img };
-            return img;
-        });
+        return list.map(img => { if (typeof img === 'string') return { name: 'image.jpg', data: img }; return img; });
     }
 
-    // --- 圖片處理與壓縮核心 ---
     async function handleFile(input, id, field) {
         const files = Array.from(input.files);
         if(files.length + (issuesData[id][field]||[]).length > 5) {
             alert("單一欄位最多 5 個附件"); input.value = ''; return;
         }
-
         if (!issuesData[id][field]) issuesData[id][field] = [];
         showLoading("正在壓縮圖片...");
-
         for (let f of files) {
             try {
-                // 如果是圖片，進行壓縮
                 if (f.type.startsWith('image/')) {
                     const compressedData = await compressImage(f);
                     issuesData[id][field].push({ name: f.name, data: compressedData });
                 } else {
-                    // 非圖片直接讀取 (如 PDF)
                     const data = await new Promise(r => {
                         const rd = new FileReader();
                         rd.onload = (e) => r(e.target.result);
@@ -394,16 +361,11 @@
                     });
                     issuesData[id][field].push({ name: f.name, data: data });
                 }
-            } catch (e) {
-                console.error("圖片處理失敗", e);
-                alert("圖片處理失敗: " + f.name);
-            }
+            } catch (e) { console.error("圖片處理失敗", e); alert("圖片處理失敗: " + f.name); }
         }
         hideLoading();
         renderTable();
     }
-
-    // 使用 Canvas 壓縮圖片到 1024px 寬，品質 0.7
     function compressImage(file) {
         return new Promise((resolve, reject) => {
             const reader = new FileReader();
@@ -414,30 +376,11 @@
                 img.onload = () => {
                     const canvas = document.createElement('canvas');
                     const ctx = canvas.getContext('2d');
-                    
-                    // 計算縮放比例
-                    const MAX_WIDTH = 1024;
-                    const MAX_HEIGHT = 1024;
-                    let width = img.width;
-                    let height = img.height;
-
-                    if (width > height) {
-                        if (width > MAX_WIDTH) {
-                            height *= MAX_WIDTH / width;
-                            width = MAX_WIDTH;
-                        }
-                    } else {
-                        if (height > MAX_HEIGHT) {
-                            width *= MAX_HEIGHT / height;
-                            height = MAX_HEIGHT;
-                        }
-                    }
-
-                    canvas.width = width;
-                    canvas.height = height;
+                    const MAX_WIDTH = 1024; const MAX_HEIGHT = 1024;
+                    let width = img.width; let height = img.height;
+                    if (width > height) { if (width > MAX_WIDTH) { height *= MAX_WIDTH / width; width = MAX_WIDTH; } } else { if (height > MAX_HEIGHT) { width *= MAX_HEIGHT / height; height = MAX_HEIGHT; } }
+                    canvas.width = width; canvas.height = height;
                     ctx.drawImage(img, 0, 0, width, height);
-
-                    // 輸出壓縮後的 Base64 (image/jpeg, quality 0.7)
                     resolve(canvas.toDataURL('image/jpeg', 0.7));
                 };
                 img.onerror = reject;
@@ -446,7 +389,6 @@
         });
     }
 
-    // --- 輔助功能 ---
     function getRowData(id) {
         return {
             id: parseInt(id),
@@ -473,8 +415,7 @@
         showLoading("☁️ 正在刪除...");
         try {
             await fetch(GOOGLE_SCRIPT_URL, {
-                method: 'POST',
-                mode: 'no-cors',
+                method: 'POST', mode: 'no-cors',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ id: id, action: 'delete' })
             });
@@ -484,17 +425,47 @@
         } catch (err) { hideLoading(); alert("刪除失敗"); }
     }
 
+    // --- 新版 ID 生成邏輯：YYMMxxxx ---
     function addNewRow() {
-        const ids = Object.keys(issuesData).map(Number);
-        const nextId = ids.length ? Math.max(...ids) + 1 : 1;
-        issuesData[nextId] = { id: nextId, status: 'new', date: new Date().toISOString().split('T')[0], imgs: [], replyImgs: [] };
+        const now = new Date();
+        const yy = String(now.getFullYear()).slice(-2);
+        const mm = String(now.getMonth() + 1).padStart(2, '0');
+        // 基礎前綴：26120000
+        const basePrefix = parseInt(yy + mm) * 10000; 
+        
+        // 找出所有符合此月份開頭的 ID
+        const currentIds = Object.keys(issuesData).map(Number);
+        const monthlyIds = currentIds.filter(id => id > basePrefix && id < basePrefix + 9999);
+        
+        let nextId;
+        if (monthlyIds.length > 0) {
+            nextId = Math.max(...monthlyIds) + 1;
+        } else {
+            nextId = basePrefix + 1; // 該月第一筆：26120001
+        }
+        
+        // 防止重複 (防呆)
+        while (issuesData[nextId]) { nextId++; }
+
+        issuesData[nextId] = {
+            id: nextId,
+            status: 'new',
+            date: now.toISOString().split('T')[0],
+            imgs: [],
+            replyImgs: []
+        };
+        
         renderTable();
+        // 自動捲動並聚焦
         setTimeout(() => {
-            document.querySelector('.issue-table').scrollIntoView({ behavior: 'smooth', block: 'end' });
+            const input = document.getElementById(`wo-${nextId}`);
+            if(input) {
+                input.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                input.focus();
+            }
         }, 100);
     }
 
-    // --- 全新強固版 CSV 解析器 (修復換行與圖片遺失問題) ---
     function csvToJSON(csvText) {
         const rows = [];
         let row = [];
@@ -504,40 +475,17 @@
         for (let i = 0; i < csvText.length; i++) {
             const char = csvText[i];
             const nextChar = csvText[i+1];
-            
             if (inQuote) {
-                if (char === '"' && nextChar === '"') {
-                    current += '"';
-                    i++; // skip next quote
-                } else if (char === '"') {
-                    inQuote = false;
-                } else {
-                    current += char;
-                }
+                if (char === '"' && nextChar === '"') { current += '"'; i++; } else if (char === '"') { inQuote = false; } else { current += char; }
             } else {
-                if (char === '"') {
-                    inQuote = true;
-                } else if (char === ',') {
-                    row.push(current);
-                    current = "";
-                } else if (char === '\r' || char === '\n') {
-                    if (char === '\r' && nextChar === '\n') i++; // handle CRLF
-                    row.push(current);
-                    if(row.length > 1) rows.push(row); // push finished row
-                    row = [];
-                    current = "";
-                } else {
-                    current += char;
-                }
+                if (char === '"') { inQuote = true; } else if (char === ',') { row.push(current); current = ""; } else if (char === '\r' || char === '\n') {
+                    if (char === '\r' && nextChar === '\n') i++; row.push(current); if(row.length > 1) rows.push(row); row = []; current = "";
+                } else { current += char; }
             }
         }
-        if (current || row.length > 0) { // push last row
-            row.push(current);
-            if(row.length > 1) rows.push(row);
-        }
+        if (current || row.length > 0) { row.push(current); if(row.length > 1) rows.push(row); }
 
         const result = {};
-        // Skip header (row 0)
         for (let i = 1; i < rows.length; i++) {
             const r = rows[i];
             const id = parseInt(r[0]);
@@ -551,19 +499,20 @@
         }
         return result;
     }
-
     function safeJsonParse(str) { try { return JSON.parse(str); } catch (e) { return []; } }
     
-    // UI 相關函式 (同前版)
     function loadSettings() {
         peList = JSON.parse(localStorage.getItem('peList')) || ["未指定", "Ray", "Lin", "PE Team"];
         catList = JSON.parse(localStorage.getItem('catList')) || ["其他", "BOM問題", "缺件", "組裝異常", "來料不良"];
         colorSettings = JSON.parse(localStorage.getItem('colorSettings')) || [{label:'正常',days:0,color:'#ffffff'},{label:'警示',days:3,color:'#fff9c4'}, {label:'嚴重',days:7,color:'#fee2e2'}];
     }
     function saveSettingsLocal() { localStorage.setItem('peList', JSON.stringify(peList)); localStorage.setItem('catList', JSON.stringify(catList)); localStorage.setItem('colorSettings', JSON.stringify(colorSettings)); }
+    
+    // 渲染表格 (新增負責人過濾 + 待辦邏輯)
     function renderTable() {
         const tbody = document.querySelector('#issueTable tbody');
         const sStatus = document.getElementById('statusFilter').value;
+        const sPe = document.getElementById('peFilter').value; // 新增負責人過濾
         const sCat = document.getElementById('categoryFilter').value;
         const sQuery = document.getElementById('searchInput').value.toLowerCase();
         const sField = document.getElementById('searchField').value;
@@ -572,7 +521,17 @@
         if (ids.length === 0) { document.getElementById('empty-msg').style.display = 'block'; return; } else { document.getElementById('empty-msg').style.display = 'none'; }
         ids.forEach(id => {
             const d = issuesData[id];
-            if (sStatus !== 'all' && d.status !== sStatus) return;
+            
+            // 負責人過濾
+            if (sPe !== 'all' && d.peOwner !== sPe) return;
+
+            // 狀態過濾 (含待辦邏輯)
+            if (sStatus === 'active') {
+                if (d.status === 'closed') return;
+            } else if (sStatus === 'closed') {
+                if (d.status !== 'closed') return;
+            }
+
             if (sCat !== 'all' && d.category !== sCat) return;
             if (sQuery && !(d[sField] || "").toString().toLowerCase().includes(sQuery)) return;
             const st = d.status || 'new';
@@ -582,37 +541,36 @@
             const makeFileHtml = (files, field) => (files || []).map((f, i) => {
                 const isData = f.data && f.data.toString().startsWith('data:');
                 const isUrl = f.data && f.data.toString().startsWith('http');
-                const isImg = isData ? f.data.startsWith('data:image/') : (isUrl ? true : false); // 簡單判斷，網址通常是存好的圖
-                const ext = f.name ? f.name.split('.').pop().toLowerCase() : '';
+                const isImg = isData ? f.data.startsWith('data:image/') : (isUrl ? true : false);
+                const src = f.data;
+                const ext = f.name ? f.name.split('.').pop().toLowerCase() : ''; 
                 
                 let iconHtml = ICONS.fileGen;
                 if(ext === 'pdf') iconHtml = ICONS.filePdf;
                 else if(['doc','docx'].includes(ext)) iconHtml = ICONS.fileDoc;
                 else if(['xls','xlsx','csv'].includes(ext)) iconHtml = ICONS.fileXls;
 
-                // 核心修復：自動將 Drive 圖片連結轉為 thumbnail 格式
-                let src = f.data;
+                let finalSrc = src;
                 if (src.includes("drive.google.com") && src.includes("id=")) {
                     const idMatch = src.match(/id=([^&]+)/);
                     if (idMatch) {
-                        // 使用 w4000 確保大圖預覽，且比 export=view 更穩定
-                        src = `https://drive.google.com/thumbnail?id=${idMatch[1]}&sz=w4000`;
+                        finalSrc = `https://drive.google.com/thumbnail?id=${idMatch[1]}&sz=w4000`;
                     }
                 }
 
-                // 錯誤處理：如果圖片還是掛掉，顯示「圖片無法讀取」的區塊，而不是破圖 icon
                 return `<div class="img-wrapper">
-                    ${isImg ? `<img src="${src}" class="img-thumb" onclick="openLightbox('${src}')" title="${f.name}" referrerpolicy="no-referrer" onerror="this.onerror=null;this.parentElement.innerHTML='<div class=\\'broken-img-box\\'><span>圖片<br>無法讀取</span></div>';">` : `<a href="${src}" target="_blank" class="file-icon-link" title="${f.name}">${iconHtml}</a>`}
+                    ${isImg ? `<img src="${finalSrc}" class="img-thumb" onclick="openLightbox('${finalSrc}')" title="${f.name}" referrerpolicy="no-referrer" onerror="this.onerror=null;this.parentElement.innerHTML='<div class=\\'broken-img-box\\'><span>圖片<br>無法讀取</span></div>';">` : `<a href="${src}" target="_blank" class="file-icon-link" title="${f.name}">${iconHtml}</a>`}
                     ${st!=='closed' ? `<div class="img-del" onclick="confirmRemoveImg(${id},'${field}',${i})">×</div>` : ''}
                 </div>`;
             }).join('');
             
             const peOptions = peList.map(p => `<option value="${p}" ${d.peOwner===p?'selected':''}>${p}</option>`).join('');
             const catOptions = catList.map(c => `<option value="${c}" ${d.category===c?'selected':''}>${c}</option>`).join('');
-            tr.innerHTML = `<td style="text-align:center"><input type="checkbox" class="row-select" data-id="${id}"></td><td style="text-align:center"><strong>#${id}</strong><span class="badge badge-${st==='closed'?'closed':(st==='saved'?'tracking':'new')}">${st==='closed'?'已結案':(st==='saved'?'追蹤中':'待處理')}</span></td><td><input type="date" id="date-${id}" value="${d.date || ''}" ${st==='closed'?'disabled':''}></td><td><input type="text" id="wo-${id}" value="${d.workOrder || ''}" placeholder="工單" ${st==='closed'?'disabled':''}><input type="text" id="model-${id}" value="${d.model || ''}" placeholder="機種" style="margin-top:2px" ${st==='closed'?'disabled':''}></td><td><input type="number" id="qty-${id}" value="${d.batchQty || ''}" oninput="calcR(${id})" ${st==='closed'?'disabled':''} placeholder="批"><input type="number" id="fail-${id}" value="${d.failQty || ''}" oninput="calcR(${id})" style="margin-top:2px" ${st==='closed'?'disabled':''} placeholder="不"><input type="text" id="rate-${id}" value="${d.failRate || '0%'}" readonly style="margin-top:2px; background:#f1f5f9; border:none;"></td><td><div class="thumb-container">${makeFileHtml(d.imgs, 'imgs')}</div>${st!=='closed'?`<input type="file" multiple style="font-size:9px;width:100%" onchange="handleFile(this,${id},'imgs')">`:''}</td><td style="position:relative"><span class="zoom-icon" onclick="openDetailView(${id}, 'issue')">${ICONS.zoom}</span><select id="cat-${id}" style="margin-bottom:4px" ${st==='closed'?'disabled':''}>${catOptions}</select><textarea id="issue-${id}" rows="2" ${st==='closed'?'disabled':''}>${d.issue || ''}</textarea></td><td><select id="pe-${id}" ${st==='closed'?'disabled':''}>${peOptions}</select></td><td style="position:relative"><span class="zoom-icon" onclick="openDetailView(${id}, 'reply')">${ICONS.zoom}</span><textarea id="reply-${id}" rows="4" ${st==='closed'?'disabled':''}>${d.replyContent || ''}</textarea></td><td><div class="thumb-container">${makeFileHtml(d.replyImgs, 'replyImgs')}</div>${st!=='closed'?`<input type="file" multiple style="font-size:9px;width:100%" onchange="handleFile(this,${id},'replyImgs')">`:''}</td><td><input type="date" id="compDate-${id}" value="${d.completionDate || ''}" ${st==='closed'?'disabled':''}></td><td style="text-align:center">${st !== 'closed' ? `<button class="btn btn-save btn-op" onclick="saveRow(${id})">${ICONS.save} 儲存</button>` : ''}${st === 'saved' ? `<button class="btn btn-close btn-op" onclick="closeRow(${id})">${ICONS.close} 結案</button>` : ''}${st === 'closed' ? `<button class="btn btn-edit btn-op" onclick="reopenRow(${id})">${ICONS.edit} 修改</button>` : `<button class="btn btn-del btn-op" onclick="deleteRow(${id})">${ICONS.trash} 刪除</button>`}</td>`;
+            tr.innerHTML = `<td style="text-align:center"><input type="checkbox" class="row-select" data-id="${id}"></td><td style="text-align:center"><strong>#${id}</strong><span class="badge badge-${st==='closed'?'closed':'tracking'}">${st==='closed'?'已結案':'待處理'}</span></td><td><input type="date" id="date-${id}" value="${d.date || ''}" ${st==='closed'?'disabled':''}></td><td><input type="text" id="wo-${id}" value="${d.workOrder || ''}" placeholder="工單" ${st==='closed'?'disabled':''}><input type="text" id="model-${id}" value="${d.model || ''}" placeholder="機種" style="margin-top:2px" ${st==='closed'?'disabled':''}></td><td><input type="number" id="qty-${id}" value="${d.batchQty || ''}" oninput="calcR(${id})" ${st==='closed'?'disabled':''} placeholder="批"><input type="number" id="fail-${id}" value="${d.failQty || ''}" oninput="calcR(${id})" style="margin-top:2px" ${st==='closed'?'disabled':''} placeholder="不"><input type="text" id="rate-${id}" value="${d.failRate || '0%'}" readonly style="margin-top:2px; background:#f1f5f9; border:none;"></td><td><div class="thumb-container">${makeFileHtml(d.imgs, 'imgs')}</div>${st!=='closed'?`<input type="file" multiple style="font-size:9px;width:100%" onchange="handleFile(this,${id},'imgs')">`:''}</td><td style="position:relative"><span class="zoom-icon" onclick="openDetailView(${id}, 'issue')">${ICONS.zoom}</span><select id="cat-${id}" style="margin-bottom:4px" ${st==='closed'?'disabled':''}>${catOptions}</select><textarea id="issue-${id}" rows="2" ${st==='closed'?'disabled':''}>${d.issue || ''}</textarea></td><td><select id="pe-${id}" ${st==='closed'?'disabled':''}>${peOptions}</select></td><td style="position:relative"><span class="zoom-icon" onclick="openDetailView(${id}, 'reply')">${ICONS.zoom}</span><textarea id="reply-${id}" rows="4" ${st==='closed'?'disabled':''}>${d.replyContent || ''}</textarea></td><td><div class="thumb-container">${makeFileHtml(d.replyImgs, 'replyImgs')}</div>${st!=='closed'?`<input type="file" multiple style="font-size:9px;width:100%" onchange="handleFile(this,${id},'replyImgs')">`:''}</td><td><input type="date" id="compDate-${id}" value="${d.completionDate || ''}" ${st==='closed'?'disabled':''}></td><td style="text-align:center">${st !== 'closed' ? `<button class="btn btn-save btn-op" onclick="saveRow(${id})">${ICONS.save} 儲存</button><button class="btn btn-close btn-op" onclick="closeRow(${id})">${ICONS.close} 結案</button><button class="btn btn-del btn-op" onclick="deleteRow(${id})">${ICONS.trash} 刪除</button>` : `<button class="btn btn-edit btn-op" onclick="reopenRow(${id})">${ICONS.edit} 修改</button>`}</td>`;
             tbody.appendChild(tr);
         });
     }
+    
     function getRowStyle(dateStr, status) { if (status === 'closed' || !dateStr) return ''; const diff = Math.floor((new Date() - new Date(dateStr)) / (1000 * 60 * 60 * 24)); let activeRule = null; colorSettings.forEach(rule => { if (diff >= rule.days) { if (!activeRule || rule.days > activeRule.days) activeRule = rule; } }); return activeRule ? `background-color:${activeRule.color}` : ''; }
     async function closeRow(id) { if (confirm("確認結案？\n這將鎖定內容並同步至雲端。")) { issuesData[id].status = 'closed'; await saveRow(id); } }
     async function reopenRow(id) { if (confirm("重新開啟此案件？")) { issuesData[id].status = 'saved'; await saveRow(id); } }
@@ -623,8 +581,11 @@
     function hideLoading(msg) { const t = document.getElementById("toast"); t.className = ""; document.getElementById("toast-loader").style.display = "none"; if (msg) showToast(msg); }
     function showToast(m) { const t = document.getElementById("toast"); document.getElementById("toast-msg").innerText = m; document.getElementById("toast-loader").style.display = "none"; t.className = "show"; setTimeout(() => t.className = "", 3000); }
     function openLightbox(s) { document.getElementById("lightbox-img").src = s; document.getElementById("lightbox").style.display = "flex"; }
+    
+    // 更新設定視窗邏輯
     function openSettingModal() { document.getElementById('settingModal').style.display = 'block'; updateSetUI(); renderColorSet(); }
-    function closeSettingModal() { saveSettingsLocal(); document.getElementById('settingModal').style.display = 'none'; updateCategorySearchFilter(); renderTable(); }
+    function closeSettingModal() { saveSettingsLocal(); document.getElementById('settingModal').style.display = 'none'; updateFilters(); renderTable(); }
+    
     function updateSetUI() { document.getElementById('peListContainer').innerHTML = peList.map((p,i) => `<li>${p} <span onclick="peList.splice(${i},1);updateSetUI()" style="color:red;cursor:pointer;float:right">×</span></li>`).join(''); document.getElementById('catListContainer').innerHTML = catList.map((c,i) => `<li>${c} <span onclick="catList.splice(${i},1);updateSetUI()" style="color:red;cursor:pointer;float:right">×</span></li>`).join(''); }
     function addSettingItem(t) { const inp = document.getElementById(t === 'pe' ? 'newPeName' : 'newCatName'); if (inp.value) { (t === 'pe' ? peList : catList).push(inp.value); inp.value = ''; updateSetUI(); } }
     function renderColorSet() { document.getElementById('colorSettingsList').innerHTML = colorSettings.map((s,i) => `<div style="display:flex;gap:5px;margin-bottom:5px"><input type="text" value="${s.label}" onchange="colorSettings[${i}].label=this.value" style="flex:2"><input type="number" value="${s.days}" onchange="colorSettings[${i}].days=parseInt(this.value)" style="flex:1"><input type="color" value="${s.color}" onchange="colorSettings[${i}].color=this.value" style="width:30px"></div>`).join(''); }
@@ -646,29 +607,28 @@
             const isImg = isData ? f.data.startsWith('data:image/') : (isUrl ? true : false);
             const src = f.data;
             const ext = f.name ? f.name.split('.').pop().toLowerCase() : ''; 
-            
-            let iconHtml = ICONS.fileGen;
-            if(ext === 'pdf') iconHtml = ICONS.filePdf;
-            else if(['doc','docx'].includes(ext)) iconHtml = ICONS.fileDoc;
-            else if(['xls','xlsx','csv'].includes(ext)) iconHtml = ICONS.fileXls;
-
-            // 核心修復：自動將 Drive 圖片連結轉為 thumbnail 格式
-            let finalSrc = src;
-            if (src.includes("drive.google.com") && src.includes("id=")) {
-                const idMatch = src.match(/id=([^&]+)/);
-                if (idMatch) {
-                    finalSrc = `https://drive.google.com/thumbnail?id=${idMatch[1]}&sz=w4000`;
-                }
-            }
-
-            const content = isImg ? `<img src="${finalSrc}" class="large-thumb-img" onclick="openLightbox('${finalSrc}')" referrerpolicy="no-referrer" onerror="this.onerror=null;this.parentElement.innerHTML='<div class=\\'broken-img-box\\'><span>圖片<br>無法讀取</span></div>';">` : `<a href="${src}" target="_blank" style="text-decoration:none; font-size:12px; display:flex; flex-direction:column; align-items:center; color:#333; height:100%; justify-content:center;">${iconHtml}<span>${f.name}</span></a>`;
-            imgBox.innerHTML += `<div class="large-thumb-box">${content}</div>`; 
+            const icon = ext==='pdf'?'📕':(['doc','docx'].includes(ext)?'📘':(['xls','xlsx','csv'].includes(ext)?'📗':'📄')); 
+            imgBox.innerHTML += `<div class="large-thumb-box">${isImg ? `<img src="${src}" class="large-thumb-img" onclick="openLightbox('${src}')">` : `<a href="${src}" target="_blank" style="text-decoration:none; font-size:40px;">${icon}<div style="font-size:12px; color:#333;">${f.name}</div></a>`}</div>`; 
         }); 
         modal.style.display = 'block'; 
     }
     function closeDetailModal() { document.getElementById('detailModal').style.display='none'; }
     function toggleSelectAll(m) { document.querySelectorAll('.row-select').forEach(cb => cb.checked = m.checked); }
-    function updateCategorySearchFilter() { const f = document.getElementById('categoryFilter'); f.innerHTML='<option value="all">ALL</option>' + catList.map(c=>`<option value="${c}">${c}</option>`).join(''); }
+    
+    // 更新所有篩選器的下拉選單
+    function updateFilters() { 
+        // 更新類別
+        const fCat = document.getElementById('categoryFilter'); 
+        const currentCat = fCat.value;
+        fCat.innerHTML='<option value="all">類別(全)</option>' + catList.map(c=>`<option value="${c}">${c}</option>`).join(''); 
+        fCat.value = currentCat; // 保持選擇
+
+        // 更新負責人 (新增)
+        const fPe = document.getElementById('peFilter');
+        const currentPe = fPe.value;
+        fPe.innerHTML = '<option value="all">負責人(全)</option>' + peList.map(p => `<option value="${p}">${p}</option>`).join('');
+        fPe.value = currentPe;
+    }
 </script>
 </body>
 </html>
