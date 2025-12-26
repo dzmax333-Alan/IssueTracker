@@ -1,0 +1,602 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <title>工廠異常追蹤系統 (雲端 SVG 版 v4)</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <style>
+        :root { --primary: #2563eb; --success: #16a34a; --warning: #ca8a04; --danger: #dc2626; --gray: #64748b; --excel: #1d6f42; --mail: #0ea5e9; }
+        body { font-family: "PingFang TC", "Microsoft JhengHei", sans-serif; background-color: #f8fafc; margin: 10px; color: #1e293b; }
+        .container { max-width: 100%; margin: auto; background: white; padding: 12px 15px; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); }
+        .header-section { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #e2e8f0; margin-bottom: 15px; padding-bottom: 12px; gap: 20px; flex-wrap: wrap; }
+        .title-group { display: flex; align-items: center; white-space: nowrap; flex-shrink: 0; gap: 10px; }
+        .search-group { display: flex; align-items: center; gap: 8px; background: #f1f5f9; padding: 5px 10px; border-radius: 8px; }
+        .action-group { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+        
+        /* 表格樣式優化 */
+        .issue-table { width: 100%; border-collapse: separate; border-spacing: 0; table-layout: fixed; font-size: 13px; }
+        .issue-table th { background-color: #f1f5f9; padding: 10px 4px; text-align: left; border-bottom: 2px solid #e2e8f0; font-weight: 600; color: #475569; position: sticky; top: 0; z-index: 10; }
+        .issue-table td { border-bottom: 1px solid #e2e8f0; padding: 6px 4px; vertical-align: middle; position: relative; }
+        
+        /* 狀態標籤 */
+        .badge { font-size: 11px; padding: 2px 4px; border-radius: 4px; font-weight: bold; display: block; margin-top: 4px; text-align: center; border: 1px solid rgba(0,0,0,0.1); }
+        .badge-new { background-color: #fef9c3; color: #854d0e; }
+        .badge-tracking { background-color: #e0f2fe; color: #0369a1; }
+        .badge-closed { background-color: #f0fdf4; color: #166534; }
+        .badge-cloud { background-color: #f3e8ff; color: #6b21a8; border: 1px solid #d8b4fe; display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px; border-radius: 4px; font-size: 11px; }
+
+        input, textarea, select { width: 100%; border: 1px solid #cbd5e1; padding: 4px 6px; border-radius: 6px; font-size: 13px; box-sizing: border-box; transition: border-color 0.2s; }
+        input:focus, textarea:focus, select:focus { border-color: var(--primary); outline: none; }
+        
+        /* 按鈕樣式 (含 SVG 支援) */
+        .btn { padding: 6px 10px; border: none; border-radius: 6px; cursor: pointer; font-weight: 500; font-size: 13px; display: inline-flex; align-items: center; gap: 6px; color: white; justify-content: center; transition: opacity 0.2s; box-shadow: 0 1px 2px rgba(0,0,0,0.1); }
+        .btn svg { width: 16px; height: 16px; stroke-width: 2.5; } /* SVG 圖示設定 */
+        .btn:hover { opacity: 0.9; transform: translateY(-1px); }
+        .btn:active { transform: translateY(0); }
+        
+        .btn-primary { background-color: var(--primary); }
+        .btn-save { background-color: var(--success); }
+        .btn-close { background-color: var(--gray); }
+        .btn-del { background-color: var(--danger); }
+        .btn-excel { background-color: var(--excel); }
+        .btn-edit { background-color: #6366f1; }
+        .btn-mail { background-color: var(--mail); }
+        .btn-refresh { background-color: #0d9488; }
+        .btn-upload { background-color: #d97706; }
+        
+        /* 表格內的操作按鈕 */
+        .btn-op { width: 100%; margin-bottom: 4px; padding: 4px 0; font-size: 12px; gap: 4px; }
+        .btn-op svg { width: 14px; height: 14px; }
+        
+        /* 放大鏡/詳情圖示 */
+        .zoom-icon { position: absolute; top: 8px; right: 8px; cursor: pointer; background: rgba(255,255,255,0.9); border-radius: 4px; padding: 4px; z-index: 5; color: var(--primary); border: 1px solid #ddd; display: flex; align-items: center; justify-content: center; width: 20px; height: 20px; }
+        .zoom-icon svg { width: 14px; height: 14px; }
+
+        .thumb-container { display: flex; flex-wrap: wrap; gap: 4px; min-height: 35px; margin-bottom: 4px; }
+        .img-wrapper { position: relative; width: 35px; height: 35px; border: 1px solid #ddd; border-radius: 4px; background: #fff; overflow: hidden; display: flex; align-items: center; justify-content: center; }
+        .img-thumb { width: 100%; height: 100%; object-fit: cover; cursor: pointer; }
+        
+        /* 檔案圖示 SVG */
+        .file-icon-svg { width: 20px; height: 20px; color: #555; }
+        .file-icon-link { display: flex; flex-direction: column; align-items: center; text-decoration: none; color: inherit; width: 100%; height: 100%; justify-content: center; }
+        
+        .img-del { position: absolute; top: 0; right: 0; background: red; color: white; width: 12px; height: 12px; font-size: 10px; text-align: center; cursor: pointer; opacity: 0.8; line-height: 12px; z-index: 10; display: flex; align-items: center; justify-content: center; }
+        
+        #lightbox { display: none; position: fixed; z-index: 3000; left: 0; top: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.85); justify-content: center; align-items: center; }
+        #lightbox img { max-width: 95%; max-height: 95%; border: 3px solid white; box-shadow: 0 0 20px rgba(0,0,0,0.5); }
+        .modal { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); overflow-y: auto; justify-content: center; align-items: flex-start; padding-top: 50px; }
+        .modal-content { background: white; padding: 25px; width: 700px; max-width: 90%; border-radius: 12px; position: relative; box-shadow: 0 10px 25px rgba(0,0,0,0.2); }
+        .modal-close { position: absolute; top: 15px; right: 15px; font-size: 24px; cursor: pointer; color: #64748b; }
+        
+        #toast { visibility: hidden; min-width: 250px; background-color: #333; color: #fff; text-align: center; border-radius: 8px; padding: 12px; position: fixed; z-index: 2000; right: 30px; bottom: 30px; box-shadow: 0 4px 12px rgba(0,0,0,0.2); display: flex; align-items: center; justify-content: center; gap: 8px; }
+        #toast.show { visibility: visible; animation: fadein 0.5s, fadeout 0.5s 2.5s; }
+        #toast.loading { background-color: var(--primary); visibility: visible; animation: none; }
+        
+        .loader { border: 3px solid rgba(255,255,255,0.3); border-radius: 50%; border-top: 3px solid white; width: 16px; height: 16px; animation: spin 1s linear infinite; display: none; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        
+        .content-box { font-size: 16px; line-height: 1.6; white-space: pre-wrap; background: #f8fafc; padding: 15px; border-radius: 8px; border: 1px solid #e2e8f0; margin-bottom: 15px; }
+        .img-gallery { display: flex; flex-wrap: wrap; gap: 10px; }
+        .large-thumb-box { width: 120px; height: 120px; border: 1px solid #ccc; border-radius: 8px; position: relative; display: flex; align-items: center; justify-content: center; background: #fff; overflow: hidden; }
+        .large-thumb-img { width: 100%; height: 100%; object-fit: cover; cursor: pointer; }
+    </style>
+</head>
+<body>
+
+<div id="toast"><div class="loader" id="toast-loader"></div><span id="toast-msg">操作成功</span></div>
+<div id="lightbox" onclick="this.style.display='none'"><img id="lightbox-img" src=""></div>
+<input type="file" id="batchUploadFile" style="display:none" accept=".json" onchange="handleBatchUpload(this)">
+
+<!-- 設定視窗 -->
+<div id="settingModal" class="modal">
+    <div class="modal-content">
+        <span class="modal-close" onclick="closeSettingModal()">×</span>
+        <h3><span class="icon-svg"><!-- Icon by JS --></span> 個人化顯示設定</h3>
+        <p style="color: #64748b; font-size: 12px;">這些設定只會儲存在這台電腦上，不影響雲端資料。</p>
+        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:20px; margin-top: 15px;">
+            <div style="border:1px solid #eee; padding:10px; border-radius: 8px;">
+                <h4>負責人 / 異常類別</h4>
+                <div style="display:flex; gap:5px; margin-bottom:5px">
+                    <input type="text" id="newPeName" placeholder="姓名">
+                    <button class="btn btn-primary" style="padding: 2px 8px;" onclick="addSettingItem('pe')">＋</button>
+                </div>
+                <ul id="peListContainer" style="height:100px; overflow-y:auto; font-size:12px; border:1px solid #ddd; padding:5px; list-style:none; margin:0;"></ul>
+                <div style="display:flex; gap:5px; margin-top:10px; margin-bottom: 5px;">
+                    <input type="text" id="newCatName" placeholder="類別">
+                    <button class="btn btn-primary" style="padding: 2px 8px;" onclick="addSettingItem('cat')">＋</button>
+                </div>
+                <ul id="catListContainer" style="height:100px; overflow-y:auto; font-size:12px; border:1px solid #ddd; padding:5px; list-style:none; margin:0;"></ul>
+            </div>
+            <div style="border:1px solid #eee; padding:10px; border-radius: 8px;">
+                <h4>超時警示顏色</h4>
+                <div id="colorSettingsList"></div>
+                <button class="btn btn-primary" style="margin-top:10px" onclick="addColorSetting()">＋ 新增規則</button>
+            </div>
+        </div>
+        <button class="btn btn-save" style="margin-top:20px; width:100%; height:40px" onclick="closeSettingModal()">儲存設定</button>
+    </div>
+</div>
+
+<!-- 匯出視窗 -->
+<div id="exportModal" class="modal">
+    <div class="modal-content" style="width:350px">
+        <h3>📊 匯出 Excel 報表</h3>
+        <p>選擇匯出狀態：</p>
+        <select id="exportStatusSelect" style="margin-bottom:20px">
+            <option value="all">全部</option>
+            <option value="new">待處理</option>
+            <option value="saved">追蹤中</option>
+            <option value="closed">已結案</option>
+        </select>
+        <div style="display:flex; gap:10px">
+            <button class="btn btn-save" style="flex:1" onclick="executeExport()">下載 Excel</button>
+            <button class="btn" style="background:#94a3b8; flex:1" onclick="document.getElementById('exportModal').style.display='none'">取消</button>
+        </div>
+    </div>
+</div>
+
+<!-- 詳細內容視窗 -->
+<div id="detailModal" class="modal">
+    <div class="modal-content">
+        <span class="modal-close" onclick="closeDetailModal()">×</span>
+        <h3 id="detailTitle">內容詳情</h3>
+        <div id="detailText" class="content-box"></div>
+        <h4>附件清單</h4>
+        <div id="detailImgs" class="img-gallery"></div>
+    </div>
+</div>
+
+<!-- 主介面 -->
+<div class="container">
+    <div class="header-section">
+        <div class="title-group">
+            <h2 style="margin:0; display:flex; align-items:center; gap:8px;">
+                <!-- 雲端 Icon -->
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:#2563eb"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"></path></svg>
+                工廠異常追蹤 <span class="badge-cloud">雲端版 v4</span>
+            </h2>
+            <div class="search-group">
+                <select id="searchField" style="width: 70px;"><option value="workOrder">工單</option><option value="model">機種</option></select>
+                <input type="text" id="searchInput" placeholder="關鍵字..." oninput="renderTable()" style="width: 100px;">
+                <select id="categoryFilter" onchange="renderTable()" style="width: 100px;"><option value="all">ALL</option></select>
+            </div>
+        </div>
+        <div class="action-group">
+            <select id="statusFilter" onchange="renderTable()" style="width:auto;"><option value="all">🔍 全部</option><option value="new">🆕 待處理</option><option value="saved">💾 追蹤中</option><option value="closed">✅ 已結案</option></select>
+            <button class="btn btn-refresh" onclick="confirmReload()" title="從 Google Sheet 下載最新資料">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                讀取雲端
+            </button>
+            <button class="btn btn-primary" onclick="addNewRow()">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                新增
+            </button>
+            <button class="btn btn-excel" onclick="openExportModal()">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+                匯出
+            </button>
+            <button class="btn btn-mail" onclick="sendMail()">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg>
+                Mail
+            </button>
+            <button class="btn btn-upload" onclick="document.getElementById('batchUploadFile').click()" title="匯入舊版資料">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                匯入
+            </button>
+            <button class="btn" style="background:#64748b;" onclick="openSettingModal()">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+                設定
+            </button>
+        </div>
+    </div>
+    
+    <div style="overflow-x: auto;">
+        <table class="issue-table" id="issueTable">
+            <thead>
+                <tr>
+                    <th style="width:30px; text-align:center"><input type="checkbox" onclick="toggleSelectAll(this)"></th>
+                    <th style="width:65px">ID/狀態</th>
+                    <th style="width:105px">發生日期</th>
+                    <th style="width:120px">工單/機種</th>
+                    <th style="width:110px">批量/不良/率</th>
+                    <th style="width:85px">發生圖/文</th>
+                    <th>問題描述</th>
+                    <th style="width:85px">負責人</th>
+                    <th>改善回覆</th>
+                    <th style="width:85px">成果圖/文</th>
+                    <th style="width:105px">完成日期</th>
+                    <th style="width:100px">操作動作</th>
+                </tr>
+            </thead>
+            <tbody>
+                <!-- 資料將由 JS 渲染 -->
+            </tbody>
+        </table>
+    </div>
+    <div id="empty-msg" style="text-align:center; padding: 20px; color: #94a3b8; display: none;">目前沒有資料，請點擊「讀取雲端」或「新增」。</div>
+</div>
+
+<script>
+    // ==========================================
+    // ⚠️ 請在此處填入你的 Google Sheet 相關網址 ⚠️
+    // ==========================================
+    
+    // 1. Google Apps Script 網頁應用程式網址 (用於寫入/刪除)
+    const GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbyRxyG6N8m_1Zo0g3t2C4TtYfaAqUZ0S2wDW8mSLvQd4aRNFsDIw72HpbP2NL003SDaDg/exec";
+    
+    // 2. Google Sheet 發布的 CSV 連結 (用於讀取)
+    // 取得方式：檔案 -> 分享 -> 發布到網路 -> 選擇 CSV -> 複製連結
+    const SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTVqkd29Qc27N_EtU00ETP0o1p7oZVCRk-EGu8sWIvrmzoSX7qLVTIT3Namhn4tyD02ij8wlupLv3Zm/pub?output=csv";
+
+    // ==========================================
+
+    // SVG 圖示定義 (集中管理)
+    const ICONS = {
+        zoom: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>`,
+        save: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"></path><polyline points="17 21 17 13 7 13 7 21"></polyline><polyline points="7 3 7 8 15 8"></polyline></svg>`,
+        close: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>`,
+        edit: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>`,
+        trash: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>`,
+        filePdf: `<svg class="file-icon-svg" viewBox="0 0 24 24" fill="none" stroke="#dc2626" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><path d="M9 15h6"></path><path d="M9 12h6"></path><path d="M9 18h6"></path></svg>`,
+        fileDoc: `<svg class="file-icon-svg" viewBox="0 0 24 24" fill="none" stroke="#2563eb" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>`,
+        fileXls: `<svg class="file-icon-svg" viewBox="0 0 24 24" fill="none" stroke="#16a34a" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><path d="M8 13h8"></path><path d="M8 17h8"></path><path d="M10 9v8"></path></svg>`,
+        fileGen: `<svg class="file-icon-svg" viewBox="0 0 24 24" fill="none" stroke="#64748b" stroke-width="2"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><polyline points="13 2 13 9 20 9"></polyline></svg>`
+    };
+
+    let issuesData = {}; 
+    let peList = []; 
+    let catList = []; 
+    let colorSettings = [];
+
+    window.onload = async () => {
+        loadSettings();
+        if(GOOGLE_SCRIPT_URL.includes("請在此填入") || SHEET_CSV_URL.includes("請在此填入")) {
+            alert("設定未完成！\n請編輯 HTML 檔案，填入您自己的 Google Script 與 CSV 網址。");
+        } else {
+            await loadAllData();
+        }
+    };
+
+    async function confirmReload() {
+        if(confirm("確定要從雲端重新讀取資料嗎？\n尚未按「儲存」的修改將會遺失。\n雲端 CSV 有 3~5 分鐘延遲，如果你剛按儲存，請稍等再讀取。")) {
+            await loadAllData();
+        }
+    }
+
+    async function loadAllData() {
+        showLoading("正在下載雲端資料...");
+        try {
+            const res = await fetch(SHEET_CSV_URL + "&t=" + Date.now());
+            const contentType = res.headers.get("content-type");
+            if (contentType && contentType.includes("text/html")) {
+                throw new Error("權限錯誤：無法讀取 CSV。\n請檢查 Google Sheet「發布到網路」是否設為「公開」。");
+            }
+            if (!res.ok) throw new Error("網路請求失敗");
+            const text = await res.text();
+            issuesData = csvToJSON(text);
+            updateCategorySearchFilter();
+            renderTable();
+            hideLoading("資料同步完成");
+        } catch (e) {
+            console.error(e);
+            hideLoading();
+            alert("讀取失敗\n\n原因：" + e.message + "\n\n請確認：\n1. 網址是否正確？\n2. Google Sheet 是否已「發布到網路」？\n3. 發布權限是否為「公開」(非僅限公司)？");
+        }
+    }
+
+    async function saveRow(id, silent = false) {
+        const rowData = getRowData(id);
+        issuesData[id] = rowData;
+        if (!silent) renderTable();
+        if (!silent) showLoading("上傳中...");
+        try {
+            await fetch(GOOGLE_SCRIPT_URL, {
+                method: 'POST', mode: 'no-cors',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(rowData)
+            });
+            if (!silent) hideLoading("雲端儲存成功！");
+        } catch (err) { hideLoading(); alert("上傳失敗：" + err); }
+    }
+
+    async function handleBatchUpload(input) {
+        if (!input.files.length) return;
+        const file = input.files[0];
+        if (!confirm(`確定要上傳 ${file.name} 到雲端嗎？\n圖片會自動上傳到雲端硬碟。`)) { input.value = ''; return; }
+        const reader = new FileReader();
+        reader.onload = async (e) => {
+            try {
+                const json = JSON.parse(e.target.result);
+                const sourceData = json.issues || json; 
+                const items = Object.values(sourceData);
+                showLoading(`準備上傳 ${items.length} 筆資料...`);
+                for (let i = 0; i < items.length; i++) {
+                    const item = items[i];
+                    item.action = 'update';
+                    if(!item.status) item.status = 'saved';
+                    if(item.imgs) item.imgs = convertOldImgs(item.imgs);
+                    if(item.replyImgs) item.replyImgs = convertOldImgs(item.replyImgs);
+                    showLoading(`上傳第 ${i+1} / ${items.length} 筆... (ID: ${item.id})`);
+                    await fetch(GOOGLE_SCRIPT_URL, {
+                        method: 'POST', mode: 'no-cors',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(item)
+                    });
+                    await new Promise(r => setTimeout(r, 1000));
+                }
+                hideLoading("全部上傳完成！圖片已轉存 Drive。");
+                alert("上傳完成！請等待 5 分鐘後再按「讀取雲端」。");
+            } catch (err) { hideLoading(); alert("解析 JSON 失敗：" + err); }
+        };
+        reader.readAsText(file);
+    }
+    function convertOldImgs(list) {
+        if (!Array.isArray(list)) return [];
+        return list.map(img => { if (typeof img === 'string') return { name: 'image.jpg', data: img }; return img; });
+    }
+
+    async function handleFile(input, id, field) {
+        const files = Array.from(input.files);
+        if(files.length + (issuesData[id][field]||[]).length > 5) {
+            alert("單一欄位最多 5 個附件"); input.value = ''; return;
+        }
+        if (!issuesData[id][field]) issuesData[id][field] = [];
+        showLoading("正在壓縮圖片...");
+        for (let f of files) {
+            try {
+                if (f.type.startsWith('image/')) {
+                    const compressedData = await compressImage(f);
+                    issuesData[id][field].push({ name: f.name, data: compressedData });
+                } else {
+                    const data = await new Promise(r => {
+                        const rd = new FileReader();
+                        rd.onload = (e) => r(e.target.result);
+                        rd.readAsDataURL(f);
+                    });
+                    issuesData[id][field].push({ name: f.name, data: data });
+                }
+            } catch (e) { console.error("圖片處理失敗", e); alert("圖片處理失敗: " + f.name); }
+        }
+        hideLoading();
+        renderTable();
+    }
+    function compressImage(file) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.readAsDataURL(file);
+            reader.onload = (e) => {
+                const img = new Image();
+                img.src = e.target.result;
+                img.onload = () => {
+                    const canvas = document.createElement('canvas');
+                    const ctx = canvas.getContext('2d');
+                    const MAX_WIDTH = 1024; const MAX_HEIGHT = 1024;
+                    let width = img.width; let height = img.height;
+                    if (width > height) { if (width > MAX_WIDTH) { height *= MAX_WIDTH / width; width = MAX_WIDTH; } } else { if (height > MAX_HEIGHT) { width *= MAX_HEIGHT / height; height = MAX_HEIGHT; } }
+                    canvas.width = width; canvas.height = height;
+                    ctx.drawImage(img, 0, 0, width, height);
+                    resolve(canvas.toDataURL('image/jpeg', 0.7));
+                };
+                img.onerror = reject;
+            };
+            reader.onerror = reject;
+        });
+    }
+
+    function getRowData(id) {
+        return {
+            id: parseInt(id),
+            status: issuesData[id].status === 'new' ? 'saved' : issuesData[id].status,
+            date: document.getElementById(`date-${id}`).value,
+            workOrder: document.getElementById(`wo-${id}`).value,
+            model: document.getElementById(`model-${id}`).value,
+            batchQty: document.getElementById(`qty-${id}`).value,
+            failQty: document.getElementById(`fail-${id}`).value,
+            failRate: document.getElementById(`rate-${id}`).value,
+            category: document.getElementById(`cat-${id}`).value,
+            issue: document.getElementById(`issue-${id}`).value,
+            peOwner: document.getElementById(`pe-${id}`).value,
+            replyContent: document.getElementById(`reply-${id}`).value,
+            completionDate: document.getElementById(`compDate-${id}`).value,
+            imgs: issuesData[id].imgs || [],
+            replyImgs: issuesData[id].replyImgs || [],
+            action: 'update'
+        };
+    }
+
+    async function deleteRow(id) {
+        if (!confirm("確定刪除此項目？\n這會同步刪除雲端資料，無法復原！")) return;
+        showLoading("正在刪除...");
+        try {
+            await fetch(GOOGLE_SCRIPT_URL, {
+                method: 'POST', mode: 'no-cors',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id: id, action: 'delete' })
+            });
+            delete issuesData[id];
+            renderTable();
+            hideLoading("已刪除");
+        } catch (err) { hideLoading(); alert("刪除失敗"); }
+    }
+
+    function addNewRow() {
+        const ids = Object.keys(issuesData).map(Number);
+        const nextId = ids.length ? Math.max(...ids) + 1 : 1;
+        issuesData[nextId] = { id: nextId, status: 'new', date: new Date().toISOString().split('T')[0], imgs: [], replyImgs: [] };
+        renderTable();
+        setTimeout(() => { document.querySelector('.issue-table').scrollIntoView({ behavior: 'smooth', block: 'end' }); }, 100);
+    }
+
+    function csvToJSON(csvText) {
+        const lines = csvText.trim().split(/\r\n|\n/);
+        if (lines.length < 2) return {}; 
+        const parseCSVLine = (str) => {
+            const result = [];
+            let current = ''; let inQuote = false;
+            for (let i = 0; i < str.length; i++) {
+                const char = str[i];
+                if (char === '"' && str[i+1] === '"') { current += '"'; i++; }
+                else if (char === '"') { inQuote = !inQuote; }
+                else if (char === ',' && !inQuote) { result.push(current); current = ''; }
+                else { current += char; }
+            }
+            result.push(current); return result;
+        };
+        const result = {};
+        for (let i = 1; i < lines.length; i++) {
+            const row = parseCSVLine(lines[i]);
+            const id = parseInt(row[0]);
+            if (isNaN(id)) continue;
+            result[id] = {
+                id: id, status: row[1]||'new', date: row[2]||'', workOrder: row[3]||'', model: row[4]||'',
+                batchQty: row[5]||'', failQty: row[6]||'', failRate: row[7]||'', category: row[8]||'',
+                issue: row[9]||'', peOwner: row[10]||'', replyContent: row[11]||'', completionDate: row[12]||'',
+                imgs: safeJsonParse(row[13]), replyImgs: safeJsonParse(row[14])
+            };
+        }
+        return result;
+    }
+    function safeJsonParse(str) { try { return JSON.parse(str); } catch (e) { return []; } }
+    
+    function loadSettings() {
+        peList = JSON.parse(localStorage.getItem('peList')) || ["未指定", "Ray", "Lin", "PE Team"];
+        catList = JSON.parse(localStorage.getItem('catList')) || ["其他", "BOM問題", "缺件", "組裝異常", "來料不良"];
+        colorSettings = JSON.parse(localStorage.getItem('colorSettings')) || [{label:'正常',days:0,color:'#ffffff'},{label:'警示',days:3,color:'#fff9c4'}, {label:'嚴重',days:7,color:'#fee2e2'}];
+    }
+    function saveSettingsLocal() { localStorage.setItem('peList', JSON.stringify(peList)); localStorage.setItem('catList', JSON.stringify(catList)); localStorage.setItem('colorSettings', JSON.stringify(colorSettings)); }
+    
+    function renderTable() {
+        const tbody = document.querySelector('#issueTable tbody');
+        const sStatus = document.getElementById('statusFilter').value;
+        const sCat = document.getElementById('categoryFilter').value;
+        const sQuery = document.getElementById('searchInput').value.toLowerCase();
+        const sField = document.getElementById('searchField').value;
+        tbody.innerHTML = '';
+        const ids = Object.keys(issuesData).sort((a,b)=>b-a);
+        if (ids.length === 0) { document.getElementById('empty-msg').style.display = 'block'; return; } else { document.getElementById('empty-msg').style.display = 'none'; }
+        ids.forEach(id => {
+            const d = issuesData[id];
+            if (sStatus !== 'all' && d.status !== sStatus) return;
+            if (sCat !== 'all' && d.category !== sCat) return;
+            if (sQuery && !(d[sField] || "").toString().toLowerCase().includes(sQuery)) return;
+            const st = d.status || 'new';
+            const tr = document.createElement('tr');
+            tr.style.cssText = getRowStyle(d.date, st);
+            
+            const makeFileHtml = (files, field) => (files || []).map((f, i) => {
+                const isData = f.data && f.data.toString().startsWith('data:');
+                const isUrl = f.data && f.data.toString().startsWith('http');
+                const isImg = isData ? f.data.startsWith('data:image/') : (isUrl ? true : false);
+                const src = f.data;
+                const ext = f.name ? f.name.split('.').pop().toLowerCase() : ''; 
+                
+                let iconHtml = ICONS.fileGen;
+                if(ext === 'pdf') iconHtml = ICONS.filePdf;
+                else if(['doc','docx'].includes(ext)) iconHtml = ICONS.fileDoc;
+                else if(['xls','xlsx','csv'].includes(ext)) iconHtml = ICONS.fileXls;
+
+                return `<div class="img-wrapper">
+                    ${isImg ? `<img src="${src}" class="img-thumb" onclick="openLightbox('${src}')" title="${f.name}">` : `<a href="${src}" target="_blank" class="file-icon-link" title="${f.name}">${iconHtml}</a>`}
+                    ${st!=='closed' ? `<div class="img-del" onclick="confirmRemoveImg(${id},'${field}',${i})">×</div>` : ''}
+                </div>`;
+            }).join('');
+            
+            const peOptions = peList.map(p => `<option value="${p}" ${d.peOwner===p?'selected':''}>${p}</option>`).join('');
+            const catOptions = catList.map(c => `<option value="${c}" ${d.category===c?'selected':''}>${c}</option>`).join('');
+            
+            tr.innerHTML = `
+                <td style="text-align:center"><input type="checkbox" class="row-select" data-id="${id}"></td>
+                <td style="text-align:center">
+                    <strong>#${id}</strong>
+                    <span class="badge badge-${st==='closed'?'closed':(st==='saved'?'tracking':'new')}">${st==='closed'?'已結案':(st==='saved'?'追蹤中':'待處理')}</span>
+                </td>
+                <td><input type="date" id="date-${id}" value="${d.date || ''}" ${st==='closed'?'disabled':''}></td>
+                <td>
+                    <input type="text" id="wo-${id}" value="${d.workOrder || ''}" placeholder="工單" ${st==='closed'?'disabled':''}>
+                    <input type="text" id="model-${id}" value="${d.model || ''}" placeholder="機種" style="margin-top:2px" ${st==='closed'?'disabled':''}>
+                </td>
+                <td>
+                    <input type="number" id="qty-${id}" value="${d.batchQty || ''}" oninput="calcR(${id})" ${st==='closed'?'disabled':''} placeholder="批">
+                    <input type="number" id="fail-${id}" value="${d.failQty || ''}" oninput="calcR(${id})" style="margin-top:2px" ${st==='closed'?'disabled':''} placeholder="不">
+                    <input type="text" id="rate-${id}" value="${d.failRate || '0%'}" readonly style="margin-top:2px; background:#f1f5f9; border:none;">
+                </td>
+                <td>
+                    <div class="thumb-container">${makeFileHtml(d.imgs, 'imgs')}</div>
+                    ${st!=='closed'?`<input type="file" multiple style="font-size:9px;width:100%" onchange="handleFile(this,${id},'imgs')">`:''}
+                </td>
+                <td style="position:relative">
+                    <span class="zoom-icon" onclick="openDetailView(${id}, 'issue')">${ICONS.zoom}</span>
+                    <select id="cat-${id}" style="margin-bottom:4px" ${st==='closed'?'disabled':''}>${catOptions}</select>
+                    <textarea id="issue-${id}" rows="2" ${st==='closed'?'disabled':''}>${d.issue || ''}</textarea>
+                </td>
+                <td><select id="pe-${id}" ${st==='closed'?'disabled':''}>${peOptions}</select></td>
+                <td style="position:relative">
+                    <span class="zoom-icon" onclick="openDetailView(${id}, 'reply')">${ICONS.zoom}</span>
+                    <textarea id="reply-${id}" rows="4" ${st==='closed'?'disabled':''}>${d.replyContent || ''}</textarea>
+                </td>
+                <td>
+                    <div class="thumb-container">${makeFileHtml(d.replyImgs, 'replyImgs')}</div>
+                    ${st!=='closed'?`<input type="file" multiple style="font-size:9px;width:100%" onchange="handleFile(this,${id},'replyImgs')">`:''}
+                </td>
+                <td><input type="date" id="compDate-${id}" value="${d.completionDate || ''}" ${st==='closed'?'disabled':''}></td>
+                <td style="text-align:center">
+                    ${st !== 'closed' ? `<button class="btn btn-save btn-op" onclick="saveRow(${id})">${ICONS.save} 儲存</button>` : ''}
+                    ${st === 'saved' ? `<button class="btn btn-close btn-op" onclick="closeRow(${id})">${ICONS.close} 結案</button>` : ''}
+                    ${st === 'closed' ? `<button class="btn btn-edit btn-op" onclick="reopenRow(${id})">${ICONS.edit} 修改</button>` : `<button class="btn btn-del btn-op" onclick="deleteRow(${id})">${ICONS.trash} 刪除</button>`}
+                </td>
+            `;
+            tbody.appendChild(tr);
+        });
+    }
+    
+    function getRowStyle(dateStr, status) { if (status === 'closed' || !dateStr) return ''; const diff = Math.floor((new Date() - new Date(dateStr)) / (1000 * 60 * 60 * 24)); let activeRule = null; colorSettings.forEach(rule => { if (diff >= rule.days) { if (!activeRule || rule.days > activeRule.days) activeRule = rule; } }); return activeRule ? `background-color:${activeRule.color}` : ''; }
+    async function closeRow(id) { if (confirm("確認結案？\n這將鎖定內容並同步至雲端。")) { issuesData[id].status = 'closed'; await saveRow(id); } }
+    async function reopenRow(id) { if (confirm("重新開啟此案件？")) { issuesData[id].status = 'saved'; await saveRow(id); } }
+    function calcR(id) { const q = parseFloat(document.getElementById(`qty-${id}`).value) || 0; const f = parseFloat(document.getElementById(`fail-${id}`).value) || 0; document.getElementById(`rate-${id}`).value = q > 0 ? ((f / q) * 100).toFixed(2) + '%' : '0%'; }
+    
+    function confirmRemoveImg(id, field, index) { if(confirm("確定移除此附件？")) { issuesData[id][field].splice(index, 1); renderTable(); } }
+    function showLoading(msg = "處理中...") { const t = document.getElementById("toast"); document.getElementById("toast-msg").innerText = msg; document.getElementById("toast-loader").style.display = "block"; t.className = "loading"; }
+    function hideLoading(msg) { const t = document.getElementById("toast"); t.className = ""; document.getElementById("toast-loader").style.display = "none"; if (msg) showToast(msg); }
+    function showToast(m) { const t = document.getElementById("toast"); document.getElementById("toast-msg").innerText = m; document.getElementById("toast-loader").style.display = "none"; t.className = "show"; setTimeout(() => t.className = "", 3000); }
+    function openLightbox(s) { document.getElementById("lightbox-img").src = s; document.getElementById("lightbox").style.display = "flex"; }
+    function openSettingModal() { document.getElementById('settingModal').style.display = 'block'; updateSetUI(); renderColorSet(); }
+    function closeSettingModal() { saveSettingsLocal(); document.getElementById('settingModal').style.display = 'none'; updateCategorySearchFilter(); renderTable(); }
+    function updateSetUI() { document.getElementById('peListContainer').innerHTML = peList.map((p,i) => `<li>${p} <span onclick="peList.splice(${i},1);updateSetUI()" style="color:red;cursor:pointer;float:right">×</span></li>`).join(''); document.getElementById('catListContainer').innerHTML = catList.map((c,i) => `<li>${c} <span onclick="catList.splice(${i},1);updateSetUI()" style="color:red;cursor:pointer;float:right">×</span></li>`).join(''); }
+    function addSettingItem(t) { const inp = document.getElementById(t === 'pe' ? 'newPeName' : 'newCatName'); if (inp.value) { (t === 'pe' ? peList : catList).push(inp.value); inp.value = ''; updateSetUI(); } }
+    function renderColorSet() { document.getElementById('colorSettingsList').innerHTML = colorSettings.map((s,i) => `<div style="display:flex;gap:5px;margin-bottom:5px"><input type="text" value="${s.label}" onchange="colorSettings[${i}].label=this.value" style="flex:2"><input type="number" value="${s.days}" onchange="colorSettings[${i}].days=parseInt(this.value)" style="flex:1"><input type="color" value="${s.color}" onchange="colorSettings[${i}].color=this.value" style="width:30px"></div>`).join(''); }
+    function addColorSetting() { colorSettings.push({label:'新規則', days:1, color:'#ffffff'}); renderColorSet(); }
+    function openExportModal() { document.getElementById('exportModal').style.display = 'flex'; }
+    function executeExport() { const statusLimit = document.getElementById('exportStatusSelect').value; const data = [["ID", "狀態", "日期", "工單", "機種", "批量", "不良數", "不良率", "類別", "描述", "負責人", "回覆", "完成日"]]; Object.values(issuesData).sort((a,b)=>b.id-a.id).forEach(i => { if(statusLimit !== 'all' && i.status !== statusLimit) return; data.push([i.id, i.status, i.date, i.workOrder, i.model, i.batchQty, i.failQty, i.failRate, i.category, i.issue, i.peOwner, i.replyContent, i.completionDate]); }); const ws = XLSX.utils.aoa_to_sheet(data); const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, "List"); XLSX.writeFile(wb, `Report_${new Date().toISOString().slice(0,10)}.xlsx`); document.getElementById('exportModal').style.display = 'none'; showToast("Excel 已匯出"); }
+    function sendMail() { const selectedIds = Array.from(document.querySelectorAll('.row-select:checked')).map(cb => cb.dataset.id); if (!selectedIds.length) return alert("請勾選要寄出的項目"); let h = `<table border="1" style="border-collapse:collapse; width:100%; font-size:13px;"><tr style="background:#f1f5f9;"><th>ID</th><th>日期</th><th>工單</th><th>機種</th><th>不良數(率)</th><th>問題描述</th><th>負責人</th><th>改善回覆</th></tr>`; selectedIds.forEach(id => { const d = issuesData[id]; h += `<tr><td style="text-align:center">#${id}</td><td>${d.date}</td><td>${d.workOrder}</td><td>${d.model}</td><td style="text-align:center">${d.failQty}(${d.failRate})</td><td>${d.issue}</td><td style="text-align:center">${d.peOwner}</td><td>${d.replyContent}</td></tr>`; }); h += `</table>`; const blob = new Blob([h], { type: 'text/html' }); navigator.clipboard.write([new ClipboardItem({ 'text/html': blob })]).then(() => { showToast("內容已複製到剪貼簿，請貼上郵件"); window.location.href = "mailto:?subject=異常追蹤匯報"; }); }
+    function openDetailView(id, type) { 
+        const d = issuesData[id]; 
+        const modal = document.getElementById('detailModal'); 
+        const imgBox = document.getElementById('detailImgs'); 
+        const files = type === 'issue' ? (d.imgs || []) : (d.replyImgs || []); 
+        document.getElementById('detailTitle').innerText = type === 'issue' ? `#${id} 問題描述` : `#${id} 改善回覆`; 
+        document.getElementById('detailText').innerText = document.getElementById(`${type==='issue'?'issue':'reply'}-${id}`).value; 
+        imgBox.innerHTML = ''; 
+        files.forEach(f => { 
+            const isData = f.data && f.data.toString().startsWith('data:');
+            const isUrl = f.data && f.data.toString().startsWith('http');
+            const isImg = isData ? f.data.startsWith('data:image/') : (isUrl ? true : false);
+            const src = f.data;
+            const ext = f.name ? f.name.split('.').pop().toLowerCase() : ''; 
+            
+            let iconHtml = ICONS.fileGen;
+            if(ext === 'pdf') iconHtml = ICONS.filePdf;
+            else if(['doc','docx'].includes(ext)) iconHtml = ICONS.fileDoc;
+            else if(['xls','xlsx','csv'].includes(ext)) iconHtml = ICONS.fileXls;
+
+            const content = isImg ? `<img src="${src}" class="large-thumb-img" onclick="openLightbox('${src}')">` : `<a href="${src}" target="_blank" style="text-decoration:none; font-size:12px; display:flex; flex-direction:column; align-items:center; color:#333; height:100%; justify-content:center;">${iconHtml}<span>${f.name}</span></a>`;
+            imgBox.innerHTML += `<div class="large-thumb-box">${content}</div>`; 
+        }); 
+        modal.style.display = 'block'; 
+    }
+    function closeDetailModal() { document.getElementById('detailModal').style.display='none'; }
+    function toggleSelectAll(m) { document.querySelectorAll('.row-select').forEach(cb => cb.checked = m.checked); }
+    function updateCategorySearchFilter() { const f = document.getElementById('categoryFilter'); f.innerHTML='<option value="all">ALL</option>' + catList.map(c=>`<option value="${c}">${c}</option>`).join(''); }
+</script>
+</body>
+</html>
